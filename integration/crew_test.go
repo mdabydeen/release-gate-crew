@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -52,11 +53,74 @@ func agentCmd(t *testing.T) []string {
 	}
 	if p, err := exec.LookPath("docker"); err == nil {
 		if exec.Command(p, "agent", "version").Run() == nil {
+			// `agentCmd` runs before `run()` resets HOME, so $HOME still points at the
+			// real user config where the `docker agent` CLI plugin is discovered
+			// ($HOME/.docker/cli-plugins/). Resolve it to a standalone binary now and
+			// use that; the per-run HOME isolation in `run()` would otherwise hide the
+			// plugin and make every flag "unknown" (the macOS/Docker-Desktop case).
+			if plug := resolveAgentPlugin(); plug != "" {
+				return []string{plug}
+			}
 			return []string{p, "agent"}
 		}
 	}
 	t.Skip("docker-agent not found; set DOCKER_AGENT")
 	return nil
+}
+
+// resolveAgentPlugin returns the absolute path to the `docker agent` CLI plugin
+// binary, or "" if `agent` is not a CLI plugin. Docker discovers plugins from
+// $DOCKER_CONFIG/cli-plugins (default $HOME/.docker/cli-plugins); the entry is
+// usually a symlink to the real binary, so we return an absolute path a fresh
+// HOME cannot hide. Only call before HOME is overridden, as `agentCmd` does.
+func resolveAgentPlugin() string {
+	cfg := os.Getenv("DOCKER_CONFIG")
+	if cfg == "" {
+		cfg = filepath.Join(homeDir(), ".docker")
+	}
+	abs, err := filepath.Abs(filepath.Join(cfg, "cli-plugins", "docker-agent"))
+	if err != nil || !fileExists(abs) {
+		return ""
+	}
+	// Trust it only if it really is a runnable agent binary.
+	if err := exec.Command(abs, "version").Run(); err != nil {
+		return ""
+	}
+	return abs
+}
+
+func homeDir() string {
+	if h := os.Getenv("HOME"); h != "" {
+		return h
+	}
+	if u, err := user.Current(); err == nil {
+		return u.HomeDir
+	}
+	return ""
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+// TestResolveAgentPlugin self-checks that, when `docker agent` is a CLI plugin,
+// the resolver returns a real binary that runs even from an isolated HOME.
+func TestResolveAgentPlugin(t *testing.T) {
+	if _, err := exec.LookPath("docker-agent"); err == nil {
+		t.Skip("standalone docker-agent on PATH; plugin resolution not exercised")
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker not installed")
+	}
+	if p := resolveAgentPlugin(); p != "" {
+		if !fileExists(p) {
+			t.Fatalf("resolved plugin path does not exist: %s", p)
+		}
+		if err := exec.Command(p, "version").Run(); err != nil {
+			t.Fatalf("resolved plugin binary does not run: %v", err)
+		}
+	}
 }
 
 // workspace copies the crew into a temp dir so runs never touch the checkout.
