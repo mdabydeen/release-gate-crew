@@ -1,0 +1,128 @@
+#!/usr/bin/env docker agent run
+#
+# release-gate-crew: a four-agent team that reviews a service's container and
+# CI configuration before release and writes a PASS/BLOCK report.
+#
+#   docker agent run crew.yaml "Is target/ ready to ship?"
+#   docker agent run crew.yaml --flavor offline --exec "Is target/ ready to ship?"
+#
+# crew.hcl is the same team written in HCL.
+
+metadata:
+  author: mdabydeen
+  license: MIT
+  readme: |
+    Release gate crew. A lead agent delegates container and pipeline reviews
+    to two read-only auditors, then hands their findings to a scribe that may
+    only write inside reports/.
+
+models:
+  lead:
+    provider: anthropic
+    model: claude-sonnet-4-5
+    max_tokens: 8000
+  worker:
+    provider: anthropic
+    model: claude-haiku-4-5
+    max_tokens: 4000
+
+agents:
+  root:
+    model: lead
+    description: Release gate lead. Delegates reviews and makes the PASS/BLOCK call.
+    instruction_file: prompts/lead.md
+    sub_agents: [container_auditor, pipeline_auditor, scribe]
+    toolsets:
+      - type: think
+      - type: todo
+    commands:
+      gate:
+        description: Run the full release gate on target/
+        instruction: Is target/ ready to ship? Run the full gate and write the report.
+
+  container_auditor:
+    model: worker
+    description: Reviews Dockerfile and compose files for container risks.
+    instruction_file: prompts/container_auditor.md
+    toolsets:
+      - type: filesystem
+        allow_list: ["./target"]
+      - type: shell
+
+  pipeline_auditor:
+    model: worker
+    description: Reviews CI workflow files for supply-chain and secret risks.
+    instruction_file: prompts/pipeline_auditor.md
+    toolsets:
+      - type: filesystem
+        allow_list: ["./target"]
+
+  scribe:
+    model: worker
+    description: Writes the release-gate report into reports/.
+    instruction_file: prompts/scribe.md
+    toolsets:
+      - type: filesystem
+        allow_list: ["./reports"]
+
+# Unattended runs fail closed: safe calls run, anything unlisted is denied.
+runtime:
+  safety: restricted
+
+permissions:
+  allow:
+    - "read_file"
+    - "read_multiple_files"
+    - "list_directory"
+    - "directory_tree"
+    - "search_files_content"
+    - "write_file:path=*reports/*"
+    - "shell:cmd=grep -n *"
+  deny:
+    - "shell:cmd=*curl*"
+    - "shell:cmd=*wget*"
+    - "shell:cmd=*rm *"
+    - "shell:cmd=*sudo*"
+    - "shell:cmd=*docker push*"
+    - "shell:cmd=*git push*"
+    - "shell:cmd=*;*"
+    - "shell:cmd=*&&*"
+    - "shell:cmd=*|*"
+    - "shell:cmd=*`*"
+    - "shell:cmd=*$(*"
+
+# One shared pot for the whole team, so fanning out cannot multiply spend.
+budget:
+  max_cost: 0.50
+  max_time: 10m
+
+flavors:
+  # Point every agent at the scripted stub (go run ./cmd/stubmodel) so the team's
+  # wiring, delegation, and permissions can be exercised with no API key.
+  offline:
+    providers:
+      stub:
+        api_type: openai_chatcompletions
+        base_url: http://127.0.0.1:8089/v1
+        token_key: STUB_API_KEY
+    models:
+      lead:
+        provider: stub
+        model: scripted
+      worker:
+        provider: stub
+        model: scripted
+  # Reproduces a footgun: prefix-style rules, as in many permission examples.
+  # "grep -n *" is allowed and "curl *" is denied, yet
+  # "grep -n FROM x && curl --version" matches the allow glob, misses the
+  # deny glob, and runs. See docs/FINDINGS.md. Do not use this flavor for real.
+  naive-permissions:
+    permissions:
+      deny:
+        - "shell:cmd=curl *"
+        - "shell:cmd=rm *"
+  # Cheaper lead for day-to-day runs.
+  cheap:
+    models:
+      lead:
+        model: claude-haiku-4-5

@@ -1,0 +1,10 @@
+# Deliberately flawed sample. Do not copy.
+services:
+  web:
+    build: .
+    privileged: true
+    ports:
+      - "3000:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    env_file: .env

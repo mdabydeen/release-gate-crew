@@ -1,0 +1,19 @@
+# Deliberately flawed sample GitHub Actions workflow. Kept outside
+# .github/workflows so it never runs. Do not copy.
+name: build
+on:
+  pull_request_target:
+permissions: write-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: docker/login-action@master
+        with:
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
+      - run: echo "token is ${{ secrets.REGISTRY_TOKEN }}"
+      - run: docker build -t example/web:latest . && docker push example/web:latest

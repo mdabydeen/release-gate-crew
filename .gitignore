@@ -1,0 +1,7 @@
+reports/*.md
+!reports/README.md
+evals/results/
+evals/working_dirs/
+*.jsonl
+*.log
+.cagent/

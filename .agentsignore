@@ -1,0 +1,6 @@
+# Agents never see these, even if a prompt asks for them.
+.env
+*.env
+.env.*
+*.pem
+*.key
